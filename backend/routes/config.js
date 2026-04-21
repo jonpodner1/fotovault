@@ -5,8 +5,8 @@ const { authenticate, requireRole } = require('../middleware/auth');
 
 const CONFIG_DOC = 'app_config';
 
-// ─── GET APP CONFIG (all authenticated users) ─────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+// ─── GET APP CONFIG (public - no auth required) ───────────────────────────────
+router.get('/', async (req, res) => {
   try {
     const doc = await db.collection('config').doc(CONFIG_DOC).get();
     const defaults = {
