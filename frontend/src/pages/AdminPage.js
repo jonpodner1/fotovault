@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 
-const TABS = ['Branding', 'Users', 'Settings'];
+const TABS = ['Branding', 'Users', 'Settings', 'Sync'];
 
 export default function AdminPage() {
   const { isAdmin } = useAuth();
@@ -11,11 +11,25 @@ export default function AdminPage() {
   const [users, setUsers] = useState([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
+  const [pending, setPending] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
 
   useEffect(() => {
     api.get('/config').then(r => setConfig(r.data));
     api.get('/users').then(r => setUsers(r.data.users));
   }, []);
+
+  useEffect(() => {
+    if (tab === 'Sync') fetchPending();
+  }, [tab]);
+
+  const fetchPending = async () => {
+    try {
+      const res = await api.get('/sync/pending');
+      setPending(res.data.pending);
+    } catch (err) { console.error(err); }
+  };
 
   const saveConfig = async () => {
     setSaving(true);
@@ -36,6 +50,20 @@ export default function AdminPage() {
     if (!window.confirm('Delete this user?')) return;
     await api.delete(`/users/${uid}`);
     setUsers(prev => prev.filter(u => u.uid !== uid));
+  };
+
+  const runSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await api.post('/sync/run');
+      setSyncResult(res.data);
+      fetchPending();
+    } catch (err) {
+      setSyncResult({ error: err.response?.data?.error || 'Sync failed' });
+    } finally {
+      setSyncing(false);
+    }
   };
 
   if (!isAdmin) return <div className="admin-denied">Admin access required.</div>;
@@ -145,7 +173,6 @@ export default function AdminPage() {
               </select>
             </label>
           </div>
-
           <div className="toggle-group">
             <label className="toggle-label">
               <input type="checkbox" checked={config.allowPublicBrowsing}
@@ -163,7 +190,6 @@ export default function AdminPage() {
               Enable watermark on downloads
             </label>
           </div>
-
           {config.watermarkEnabled && (
             <label>Watermark Text
               <input value={config.watermarkText}
@@ -171,11 +197,77 @@ export default function AdminPage() {
                 placeholder="© Your Name" />
             </label>
           )}
-
           <button className="btn-primary" onClick={saveConfig} disabled={saving}>
             {saving ? 'Saving…' : 'Save Settings'}
           </button>
           {msg && <span className="save-msg">{msg}</span>}
+        </div>
+      )}
+
+      {/* ── SYNC ── */}
+      {tab === 'Sync' && (
+        <div className="admin-section">
+          <h3 style={{ marginBottom: 8 }}>Wasabi Import Sync</h3>
+          <p style={{ color: 'var(--text-2)', fontSize: '0.9rem', marginBottom: 20 }}>
+            Drop photos into your Wasabi bucket under <code>imports/AlbumName/photo.jpg</code> and sync them here.
+            Albums are auto-created if they don't exist. Photos are moved to the normal storage structure after import.
+            Auto-sync runs every 15 minutes.
+          </p>
+
+          <div style={{ marginBottom: 20 }}>
+            <button className="btn-primary" onClick={runSync} disabled={syncing}>
+              {syncing ? '⟳ Syncing…' : '⟳ Run Sync Now'}
+            </button>
+            <button className="btn-ghost" onClick={fetchPending} style={{ marginLeft: 10 }}>
+              Refresh Pending
+            </button>
+          </div>
+
+          {syncResult && (
+            <div style={{
+              padding: '12px 16px',
+              borderRadius: 8,
+              marginBottom: 20,
+              background: syncResult.error ? 'rgba(233,69,96,0.1)' : 'rgba(34,217,138,0.1)',
+              border: `1px solid ${syncResult.error ? 'rgba(233,69,96,0.3)' : 'rgba(34,217,138,0.3)'}`,
+              color: syncResult.error ? 'var(--accent)' : 'var(--green)',
+              fontSize: '0.9rem',
+            }}>
+              {syncResult.error
+                ? `✗ ${syncResult.error}`
+                : `✓ ${syncResult.processed} imported, ${syncResult.skipped} skipped${syncResult.errors?.length > 0 ? `, ${syncResult.errors.length} errors` : ''}`
+              }
+            </div>
+          )}
+
+          <h4 style={{ marginBottom: 10, fontSize: '0.95rem' }}>
+            Pending in imports/ ({pending.length} files)
+          </h4>
+
+          {pending.length === 0 ? (
+            <p style={{ color: 'var(--text-3)', fontSize: '0.85rem' }}>No files waiting to be imported.</p>
+          ) : (
+            <table className="users-table">
+              <thead>
+                <tr><th>File</th><th>Album</th><th>Size</th><th>Added</th></tr>
+              </thead>
+              <tbody>
+                {pending.map(f => {
+                  const parts = f.key.replace('imports/', '').split('/');
+                  const album = parts.length > 1 ? parts[0] : '(no album)';
+                  const file = parts[parts.length - 1];
+                  return (
+                    <tr key={f.key}>
+                      <td>{file}</td>
+                      <td>{album}</td>
+                      <td>{(f.size / 1024).toFixed(0)} KB</td>
+                      <td>{new Date(f.lastModified).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </div>

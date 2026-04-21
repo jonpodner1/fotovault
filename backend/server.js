@@ -6,6 +6,7 @@ const photosRouter = require('./routes/photos');
 const albumsRouter = require('./routes/albums');
 const usersRouter = require('./routes/users');
 const configRouter = require('./routes/config');
+const { router: syncRouter } = require('./routes/sync');
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use('/api/photos', photosRouter);
 app.use('/api/albums', albumsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/config', configRouter);
+app.use('/api/sync', syncRouter);
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
@@ -33,6 +35,20 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 4000;
+// ─── AUTO SYNC SCHEDULE ───────────────────────────────────────────────────────
+const { runSync } = require('./routes/sync');
+const SYNC_INTERVAL_MINUTES = 15;
+setInterval(async () => {
+  console.log('⏱  Running scheduled Wasabi import sync...');
+  try {
+    const results = await runSync();
+    if (results.processed > 0) {
+      console.log(`✓ Sync complete: ${results.processed} imported, ${results.skipped} skipped`);
+    }
+  } catch (err) {
+    console.error('Scheduled sync error:', err.message);
+  }
+}, SYNC_INTERVAL_MINUTES * 60 * 1000);
 app.listen(PORT, () => {
   console.log(`🚀 FotoVault backend running on port ${PORT}`);
 });
