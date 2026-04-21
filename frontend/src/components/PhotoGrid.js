@@ -1,8 +1,8 @@
 import React from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
-export default function PhotoGrid({ photos, onPhotoClick, onDownload, onDelete }) {
-  const { isAdmin } = useAuth();
+export default function PhotoGrid({ photos, onPhotoClick, onDownload, onDelete, onShare }) {
+  const { isAdmin, isEditor } = useAuth();
 
   if (photos.length === 0) {
     return (
@@ -33,7 +33,15 @@ export default function PhotoGrid({ photos, onPhotoClick, onDownload, onDelete }
                 >
                   ↓
                 </button>
-                <button className="photo-action-btn" title="Share" onClick={() => onShare && onShare(photo)}>⤴</button>
+                {isEditor && (
+                  <button
+                    className="photo-action-btn"
+                    title="Share"
+                    onClick={() => onShare(photo)}
+                  >
+                    ⤴
+                  </button>
+                )}
                 {isAdmin && (
                   <button
                     className="photo-action-btn danger"

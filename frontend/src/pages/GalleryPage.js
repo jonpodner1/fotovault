@@ -1,4 +1,3 @@
-import ShareModal from '../components/ShareModal';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../utils/api';
@@ -6,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import PhotoGrid from '../components/PhotoGrid';
 import UploadModal from '../components/UploadModal';
 import PhotoLightbox from '../components/PhotoLightbox';
+import ShareModal from '../components/ShareModal';
 
 export default function GalleryPage() {
   const { isEditor } = useAuth();
@@ -59,7 +59,14 @@ export default function GalleryPage() {
     setPhotos(prev => prev.filter(p => p.id !== photoId));
   };
 
-  // Collect all unique tags from current photos
+  const handleShare = (photo) => {
+    setShareTarget({
+      type: 'photo',
+      id: photo.id,
+      name: photo.title || photo.filename,
+    });
+  };
+
   const allTags = [...new Set(photos.flatMap(p => p.tags || []))];
 
   return (
@@ -68,7 +75,10 @@ export default function GalleryPage() {
         <div className="gallery-filters">
           <select
             value={albumFilter}
-            onChange={e => setSearchParams(prev => { e.target.value ? prev.set('album', e.target.value) : prev.delete('album'); return prev; })}
+            onChange={e => setSearchParams(prev => {
+              e.target.value ? prev.set('album', e.target.value) : prev.delete('album');
+              return prev;
+            })}
             className="filter-select"
           >
             <option value="">All Albums</option>
@@ -110,6 +120,7 @@ export default function GalleryPage() {
           onPhotoClick={setLightboxPhoto}
           onDownload={handleDownload}
           onDelete={handleDelete}
+          onShare={handleShare}
         />
       )}
 
@@ -130,6 +141,7 @@ export default function GalleryPage() {
           onDownload={handleDownload}
         />
       )}
+
       {shareTarget && (
         <ShareModal
           type={shareTarget.type}
