@@ -1,3 +1,4 @@
+import SharePage from './pages/SharePage';
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -56,6 +57,7 @@ function AppShell() {
             <Route path="/admin" element={
               <ProtectedRoute requiredRole="admin" config={appConfig}><AdminPage /></ProtectedRoute>
             } />
+            <Route path="/share/:token" element={<SharePage />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>

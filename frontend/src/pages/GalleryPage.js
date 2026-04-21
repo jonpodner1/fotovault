@@ -1,3 +1,4 @@
+import ShareModal from '../components/ShareModal';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../utils/api';
@@ -14,6 +15,7 @@ export default function GalleryPage() {
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
+  const [shareTarget, setShareTarget] = useState(null);
 
   const albumFilter = searchParams.get('album') || '';
   const tagFilter = searchParams.get('tag') || '';
@@ -126,6 +128,14 @@ export default function GalleryPage() {
           onClose={() => setLightboxPhoto(null)}
           onNavigate={setLightboxPhoto}
           onDownload={handleDownload}
+        />
+      )}
+      {shareTarget && (
+        <ShareModal
+          type={shareTarget.type}
+          targetId={shareTarget.id}
+          targetName={shareTarget.name}
+          onClose={() => setShareTarget(null)}
         />
       )}
     </div>

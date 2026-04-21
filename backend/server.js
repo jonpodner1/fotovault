@@ -7,6 +7,7 @@ const albumsRouter = require('./routes/albums');
 const usersRouter = require('./routes/users');
 const configRouter = require('./routes/config');
 const { router: syncRouter } = require('./routes/sync');
+const sharesRouter = require('./routes/shares');
 
 const app = express();
 
@@ -27,6 +28,7 @@ app.use('/api/albums', albumsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/config', configRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/shares', sharesRouter);
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {

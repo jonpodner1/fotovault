@@ -567,3 +567,42 @@ h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 700; letter-spac
   .lightbox-meta { flex-direction: column; }
   .navbar-user .user-chip { display: none; }
 }
+
+/* ─── SHARE PAGE ──────────────────────────────────────────────────────────── */
+.share-page { min-height: 100vh; background: var(--bg); padding-top: 0; }
+.share-header {
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.share-brand {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-display); font-weight: 800;
+  font-size: 1rem; color: var(--text-2); margin-bottom: 16px;
+}
+.share-title h1 { font-size: 1.6rem; margin-bottom: 4px; }
+.share-title p { color: var(--text-2); font-size: 0.9rem; }
+.share-meta { font-size: 0.8rem; color: var(--text-3); }
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 24px 28px;
+  max-width: 1600px; margin: 0 auto;
+}
+.share-single {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 32px 28px; gap: 20px;
+}
+.share-single-img { max-width: 100%; max-height: 70vh; border-radius: var(--radius); }
+.share-download { min-width: 160px; justify-content: center; }
+.share-error {
+  text-align: center; padding: 100px 20px; color: var(--text-3);
+}
+.share-error h2 { font-size: 1.4rem; margin-bottom: 8px; color: var(--text-2); }
+.share-footer {
+  text-align: center; padding: 24px;
+  font-size: 0.8rem; color: var(--text-3);
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}

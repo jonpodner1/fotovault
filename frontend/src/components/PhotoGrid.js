@@ -33,6 +33,7 @@ export default function PhotoGrid({ photos, onPhotoClick, onDownload, onDelete }
                 >
                   ↓
                 </button>
+                <button className="photo-action-btn" title="Share" onClick={() => onShare && onShare(photo)}>⤴</button>
                 {isAdmin && (
                   <button
                     className="photo-action-btn danger"
