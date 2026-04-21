@@ -11,42 +11,56 @@ import AdminPage from './pages/AdminPage';
 import api from './utils/api';
 import './styles.css';
 
+export const ConfigContext = React.createContext({});
+
 function AppShell() {
   const { user, loading } = useAuth();
   const location = useLocation();
-  const [appConfig, setAppConfig] = useState({ appName: 'FotoVault', logoUrl: null });
+  const [appConfig, setAppConfig] = useState(null);
+  const [configLoading, setConfigLoading] = useState(true);
   const isAuthPage = ['/login', '/register'].includes(location.pathname);
 
   useEffect(() => {
-    if (user) {
-      api.get('/config').then(r => setAppConfig(r.data)).catch(() => {});
-    }
-  }, [user]);
+    api.get('/config').then(r => {
+      setAppConfig(r.data);
+      const root = document.documentElement;
+      if (r.data.primaryColor) root.style.setProperty('--bg', r.data.primaryColor);
+      if (r.data.accentColor)  root.style.setProperty('--accent', r.data.accentColor);
+    }).catch(() => {
+      setAppConfig({});
+    }).finally(() => {
+      setConfigLoading(false);
+    });
+  }, []);
 
-  if (loading) return <div className="full-loading"><span className="logo-icon spin">◈</span></div>;
+  if (loading || configLoading) {
+    return <div className="full-loading"><span className="logo-icon spin">◈</span></div>;
+  }
 
   return (
-    <div className="app">
-      {user && !isAuthPage && (
-        <Navbar appName={appConfig.appName} logoUrl={appConfig.logoUrl} />
-      )}
-      <main className="main-content">
-        <Routes>
-          <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-          <Route path="/register" element={user ? <Navigate to="/" /> : <RegisterPage />} />
-          <Route path="/" element={
-            <ProtectedRoute><GalleryPage /></ProtectedRoute>
-          } />
-          <Route path="/albums" element={
-            <ProtectedRoute><AlbumsPage /></ProtectedRoute>
-          } />
-          <Route path="/admin" element={
-            <ProtectedRoute requiredRole="admin"><AdminPage /></ProtectedRoute>
-          } />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </main>
-    </div>
+    <ConfigContext.Provider value={appConfig || {}}>
+      <div className="app">
+        {user && !isAuthPage && (
+          <Navbar appName={appConfig?.appName || 'FotoVault'} logoUrl={appConfig?.logoUrl} />
+        )}
+        <main className="main-content">
+          <Routes>
+            <Route path="/login"    element={user ? <Navigate to="/" /> : <LoginPage />} />
+            <Route path="/register" element={user ? <Navigate to="/" /> : <RegisterPage />} />
+            <Route path="/" element={
+              <ProtectedRoute config={appConfig}><GalleryPage /></ProtectedRoute>
+            } />
+            <Route path="/albums" element={
+              <ProtectedRoute config={appConfig}><AlbumsPage /></ProtectedRoute>
+            } />
+            <Route path="/admin" element={
+              <ProtectedRoute requiredRole="admin" config={appConfig}><AdminPage /></ProtectedRoute>
+            } />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </main>
+      </div>
+    </ConfigContext.Provider>
   );
 }
 
