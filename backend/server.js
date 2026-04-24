@@ -8,6 +8,7 @@ const usersRouter = require('./routes/users');
 const configRouter = require('./routes/config');
 const { router: syncRouter } = require('./routes/sync');
 const sharesRouter = require('./routes/shares');
+const cleanupRouter = require('./routes/cleanup');
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use('/api/users', usersRouter);
 app.use('/api/config', configRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/shares', sharesRouter);
+app.use('/api/cleanup', cleanupRouter);
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
