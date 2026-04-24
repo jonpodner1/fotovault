@@ -226,14 +226,29 @@ export default function AdminPage() {
 			Drop photos into your Wasabi bucket under imports/AlbumName/photo.jpg and sync them here.
 			Albums are auto-created if they do not exist. Auto-sync runs every 15 minutes.
 		  </p>
-		  <div style={{ marginBottom: 20 }}>
-			<button className="btn-primary" onClick={runSync} disabled={syncing}>
-			  {syncing ? 'Syncing...' : 'Run Sync Now'}
-			</button>
-			<button className="btn-ghost" onClick={fetchPending} style={{ marginLeft: 10 }}>
-			  Refresh Pending
-			</button>
-		  </div>
+	<div className="toggle-group" style={{ marginBottom: 20 }}>
+		<label className="toggle-label">
+		  <input
+			type="checkbox"
+			checked={config.autoSyncEnabled !== false}
+			onChange={async e => {
+			  const updated = { ...config, autoSyncEnabled: e.target.checked };
+			  setConfig(updated);
+			  await api.patch('/config', { autoSyncEnabled: e.target.checked });
+			}}
+		  />
+		  Auto-sync every 15 minutes
+		</label>
+	  </div>
+	
+	  <div style={{ marginBottom: 20 }}>
+		<button className="btn-primary" onClick={runSync} disabled={syncing}>
+		  {syncing ? 'Syncing...' : 'Run Sync Now'}
+		</button>
+		<button className="btn-ghost" onClick={fetchPending} style={{ marginLeft: 10 }}>
+		  Refresh Pending
+		</button>
+	  </div>
 		  {syncResult && (
 			<div style={{
 			  padding: '12px 16px', borderRadius: 8, marginBottom: 20,

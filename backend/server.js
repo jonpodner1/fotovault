@@ -43,8 +43,13 @@ const PORT = process.env.PORT || 4000;
 const { runSync } = require('./routes/sync');
 const SYNC_INTERVAL_MINUTES = 15;
 setInterval(async () => {
-  console.log('⏱  Running scheduled Wasabi import sync...');
   try {
+    // Check if auto sync is enabled in config
+    const configDoc = await db.collection('config').doc('app_config').get();
+    const autoSyncEnabled = configDoc.exists ? configDoc.data().autoSyncEnabled : true;
+    if (!autoSyncEnabled) return;
+
+    console.log('⏱  Running scheduled Wasabi import sync...');
     const results = await runSync();
     if (results.processed > 0) {
       console.log(`✓ Sync complete: ${results.processed} imported, ${results.skipped} skipped`);
