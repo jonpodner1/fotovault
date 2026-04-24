@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import ShareModal from '../components/ShareModal';
 
 export default function AlbumsPage() {
   const { isEditor, isAdmin } = useAuth();
@@ -10,6 +11,8 @@ export default function AlbumsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbum, setNewAlbum] = useState({ name: '', description: '', tags: '' });
+  const [shareTarget, setShareTarget] = useState(null);
+  const [downloading, setDownloading] = useState(null);
 
   const fetchAlbums = async () => {
     setLoading(true);
@@ -37,6 +40,36 @@ export default function AlbumsPage() {
       setAlbums(prev => prev.filter(a => a.id !== id));
     } catch (err) {
       alert(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
+  const downloadAlbum = async (album) => {
+    setDownloading(album.id);
+    try {
+      const { auth } = await import('../firebase');
+      const token = await auth.currentUser.getIdToken();
+      const apiUrl = process.env.REACT_APP_API_URL || '';
+      const url = apiUrl + '/api/sync/album-download/' + album.id;
+
+      const response = await fetch(url, {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+
+      if (!response.ok) throw new Error('Download failed');
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = album.name + '.zip';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      alert('Download failed: ' + err.message);
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -97,14 +130,47 @@ export default function AlbumsPage() {
                   )}
                 </div>
               </div>
-              {isAdmin && (
-                <button className="album-delete-btn" onClick={e => { e.stopPropagation(); deleteAlbum(album.id); }}>
-                  ✕
+
+              <div className="album-actions" onClick={e => e.stopPropagation()}>
+                <button
+                  className="album-action-btn"
+                  title="Download album as zip"
+                  onClick={() => downloadAlbum(album)}
+                  disabled={downloading === album.id}
+                >
+                  {downloading === album.id ? '⟳' : '↓'}
                 </button>
-              )}
+                {isEditor && (
+                  <button
+                    className="album-action-btn"
+                    title="Share album"
+                    onClick={() => setShareTarget(album)}
+                  >
+                    ⤴
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    className="album-action-btn danger"
+                    title="Delete album"
+                    onClick={() => deleteAlbum(album.id)}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
+      )}
+
+      {shareTarget && (
+        <ShareModal
+          type="album"
+          targetId={shareTarget.id}
+          targetName={shareTarget.name}
+          onClose={() => setShareTarget(null)}
+        />
       )}
     </div>
   );

@@ -4,6 +4,7 @@ const {
   S3Client, ListObjectsV2Command, GetObjectCommand,
   DeleteObjectCommand
 } = require('@aws-sdk/client-s3');
+const archiver = require('archiver');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { db } = require('../services/firebase');
@@ -138,12 +139,20 @@ async function runSync() {
         uploadFile({ key: thumbKey, buffer: thumbBuffer, mimetype: 'image/webp' }),
       ]);
 
-      const title = filename.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+      // Count existing photos in album to get the next number for renaming
+      const existingSnap = await db.collection('photos')
+        .where('albumId', '==', albumId)
+        .where('status', '==', 'active')
+        .get();
+      const photoNumber = existingSnap.size + 1;
+      const renamedFilename = albumName + ' ' + photoNumber + '.' + ext;
+      const title = albumName + ' ' + photoNumber;
+
       await db.collection('photos').doc(photoId).set({
         id: photoId,
         key: newKey,
         thumbKey,
-        filename,
+        filename: renamedFilename,
         title,
         mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext),
         albumId,
@@ -162,7 +171,7 @@ async function runSync() {
       await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key }));
 
       results.processed++;
-      console.log('Imported: ' + filename + ' into album: ' + albumName);
+      console.log('Imported: ' + renamedFilename + ' into album: ' + albumName);
     } catch (err) {
       console.error('Sync error for', obj.Key, err.message);
       results.errors.push({ file: obj.Key, error: err.message });
@@ -172,6 +181,7 @@ async function runSync() {
   return results;
 }
 
+// ─── MANUAL SYNC TRIGGER (admin only) ────────────────────────────────────────
 router.post('/run', authenticate, requireRole('admin'), async (req, res) => {
   try {
     const results = await runSync();
@@ -182,6 +192,7 @@ router.post('/run', authenticate, requireRole('admin'), async (req, res) => {
   }
 });
 
+// ─── LIST PENDING (admin only) ────────────────────────────────────────────────
 router.get('/pending', authenticate, requireRole('admin'), async (req, res) => {
   try {
     const listCmd = new ListObjectsV2Command({ Bucket: BUCKET, Prefix: IMPORT_PREFIX });
@@ -195,6 +206,7 @@ router.get('/pending', authenticate, requireRole('admin'), async (req, res) => {
   }
 });
 
+// ─── DOWNLOAD ALBUM AS ZIP ────────────────────────────────────────────────────
 router.get('/album-download/:albumId', authenticate, async (req, res) => {
   try {
     const { albumId } = req.params;
@@ -209,19 +221,42 @@ router.get('/album-download/:albumId', authenticate, async (req, res) => {
 
     if (photosSnap.empty) return res.status(404).json({ error: 'No photos in this album' });
 
-    const files = await Promise.all(
-      photosSnap.docs.map(async doc => {
-        const photo = doc.data();
-        const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: photo.key });
-        const url = await getSignedUrl(s3, cmd, { expiresIn: 3600 });
-        return { filename: photo.filename || photo.title || photo.id, url, photoId: photo.id };
-      })
-    );
+    // Set headers for zip download
+    const zipName = album.name.replace(/[^a-z0-9 _-]/gi, '_') + '.zip';
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + zipName + '"');
 
-    res.json({ albumName: album.name, photoCount: files.length, files });
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.pipe(res);
+
+    archive.on('error', err => {
+      console.error('Archive error:', err);
+      if (!res.headersSent) res.status(500).end();
+    });
+
+    // Stream each photo from Wasabi into the zip
+    let counter = 1;
+    for (const doc of photosSnap.docs) {
+      const photo = doc.data();
+      try {
+        const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: photo.key });
+        const response = await s3.send(cmd);
+        const buffer = await streamToBuffer(response.Body);
+        const ext = (photo.filename || 'photo.jpg').split('.').pop().toLowerCase();
+        const zipFilename = album.name + ' ' + counter + '.' + ext;
+        archive.append(buffer, { name: zipFilename });
+        counter++;
+      } catch (err) {
+        console.error('Failed to add photo to zip:', photo.id, err.message);
+      }
+    }
+
+    await archive.finalize();
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to prepare album download' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to prepare album download' });
+    }
   }
 });
 

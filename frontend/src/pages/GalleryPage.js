@@ -46,11 +46,22 @@ export default function GalleryPage() {
   useEffect(() => { fetchAlbums(); }, []);
 
   const handleDownload = async (photo) => {
-    const res = await api.get(`/photos/${photo.id}`);
-    const link = document.createElement('a');
-    link.href = res.data.fullUrl;
-    link.download = photo.filename;
-    link.click();
+    try {
+      const res = await api.get(`/photos/${photo.id}`);
+      const response = await fetch(res.data.fullUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = photo.filename || 'photo.jpg';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Download failed', err);
+      alert('Download failed');
+    }
   };
 
   const handleDelete = async (photoId) => {
