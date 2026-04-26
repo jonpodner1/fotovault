@@ -22,6 +22,7 @@ router.get('/', async (req, res) => {
       watermarkEnabled: false,
       watermarkText: '',
       autoSyncEnabled: true,
+      allowGoogleSignIn: true,
     };
     res.json(doc.exists ? { ...defaults, ...doc.data() } : defaults);
   } catch (err) {
@@ -35,7 +36,7 @@ router.patch('/', authenticate, requireRole('admin'), async (req, res) => {
     const allowed = [
       'appName', 'tagline', 'primaryColor', 'accentColor', 'logoUrl',
       'allowPublicBrowsing', 'allowGuestDownloads', 'maxUploadSizeMB',
-      'defaultAlbumView', 'watermarkEnabled', 'watermarkText','autoSyncEnabled'
+      'defaultAlbumView', 'watermarkEnabled', 'watermarkText','autoSyncEnabled','allowGoogleSignIn',
     ];
 
     const updates = {};

@@ -145,6 +145,13 @@ export default function AdminPage() {
 			  <img src={config.logoUrl} alt="Logo preview" style={{ maxHeight: 80 }} />
 			</div>
 		  )}
+		  <div className="toggle-group" style={{ marginBottom: 16 }}>
+			  <label className="toggle-label">
+				<input type="checkbox" checked={config.allowGoogleSignIn !== false}
+				  onChange={e => setConfig({ ...config, allowGoogleSignIn: e.target.checked })} />
+				Allow Google Sign-In
+			  </label>
+			</div>
 		  <button className="btn-primary" onClick={saveConfig} disabled={saving}>
 			{saving ? 'Saving...' : 'Save Branding'}
 		  </button>
