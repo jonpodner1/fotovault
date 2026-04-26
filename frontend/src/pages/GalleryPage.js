@@ -12,6 +12,7 @@ export default function GalleryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [photos, setPhotos] = useState([]);
   const [albums, setAlbums] = useState([]);
+  const [years, setYears] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
@@ -19,6 +20,7 @@ export default function GalleryPage() {
 
   const albumFilter = searchParams.get('album') || '';
   const tagFilter = searchParams.get('tag') || '';
+  const yearFilter = searchParams.get('year') || '';
 
   const fetchPhotos = async () => {
     setLoading(true);
@@ -37,13 +39,23 @@ export default function GalleryPage() {
 
   const fetchAlbums = async () => {
     try {
-      const res = await api.get('/albums');
+      const params = {};
+      if (yearFilter) params.schoolYear = yearFilter;
+      const res = await api.get('/albums', { params });
       setAlbums(res.data.albums);
     } catch (err) { console.error(err); }
   };
 
+  const fetchYears = async () => {
+    try {
+      const res = await api.get('/albums/years/list');
+      setYears(res.data.years);
+    } catch (err) { console.error(err); }
+  };
+
   useEffect(() => { fetchPhotos(); }, [albumFilter, tagFilter]);
-  useEffect(() => { fetchAlbums(); }, []);
+  useEffect(() => { fetchAlbums(); }, [yearFilter]);
+  useEffect(() => { fetchYears(); }, []);
 
   const handleDownload = async (photo) => {
     try {
@@ -78,34 +90,55 @@ export default function GalleryPage() {
     });
   };
 
+  const setParam = (key, value) => {
+    setSearchParams(prev => {
+      if (value) {
+        prev.set(key, value);
+      } else {
+        prev.delete(key);
+      }
+      // When changing year, clear album filter
+      if (key === 'year') prev.delete('album');
+      return prev;
+    });
+  };
+
   const allTags = [...new Set(photos.flatMap(p => p.tags || []))];
 
   return (
     <div className="gallery-page">
       <div className="gallery-header">
         <div className="gallery-filters">
+          {/* Year filter */}
+          {years.length > 0 && (
+            <select
+              value={yearFilter}
+              onChange={e => setParam('year', e.target.value)}
+              className="filter-select"
+            >
+              <option value="">All Years</option>
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          )}
+
+          {/* Album filter */}
           <select
             value={albumFilter}
-            onChange={e => setSearchParams(prev => {
-              e.target.value ? prev.set('album', e.target.value) : prev.delete('album');
-              return prev;
-            })}
+            onChange={e => setParam('album', e.target.value)}
             className="filter-select"
           >
             <option value="">All Albums</option>
             {albums.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
 
+          {/* Tag filters */}
           {allTags.length > 0 && (
             <div className="tag-filters">
               {allTags.map(tag => (
                 <button
                   key={tag}
                   className={`tag-chip ${tagFilter === tag ? 'active' : ''}`}
-                  onClick={() => setSearchParams(prev => {
-                    tagFilter === tag ? prev.delete('tag') : prev.set('tag', tag);
-                    return prev;
-                  })}
+                  onClick={() => setParam('tag', tagFilter === tag ? '' : tag)}
                 >
                   #{tag}
                 </button>

@@ -1,4 +1,3 @@
-import SharePage from './pages/SharePage';
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -9,6 +8,8 @@ import RegisterPage from './pages/RegisterPage';
 import GalleryPage from './pages/GalleryPage';
 import AlbumsPage from './pages/AlbumsPage';
 import AdminPage from './pages/AdminPage';
+import YearsPage from './pages/YearsPage';
+import SharePage from './pages/SharePage';
 import api from './utils/api';
 import './styles.css';
 
@@ -20,6 +21,7 @@ function AppShell() {
   const [appConfig, setAppConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
   const isAuthPage = ['/login', '/register'].includes(location.pathname);
+  const isSharePage = location.pathname.startsWith('/share/');
 
   useEffect(() => {
     api.get('/config').then(r => {
@@ -41,23 +43,32 @@ function AppShell() {
   return (
     <ConfigContext.Provider value={appConfig || {}}>
       <div className="app">
-        {user && !isAuthPage && (
+        {user && !isAuthPage && !isSharePage && (
           <Navbar appName={appConfig?.appName || 'FotoVault'} logoUrl={appConfig?.logoUrl} />
         )}
         <main className="main-content">
           <Routes>
             <Route path="/login"    element={user ? <Navigate to="/" /> : <LoginPage />} />
             <Route path="/register" element={user ? <Navigate to="/" /> : <RegisterPage />} />
+            <Route path="/share/:token" element={<SharePage />} />
             <Route path="/" element={
               <ProtectedRoute config={appConfig}><GalleryPage /></ProtectedRoute>
             } />
             <Route path="/albums" element={
               <ProtectedRoute config={appConfig}><AlbumsPage /></ProtectedRoute>
             } />
+            <Route path="/albums/:albumId" element={
+              <ProtectedRoute config={appConfig}><AlbumsPage /></ProtectedRoute>
+            } />
+            <Route path="/years" element={
+              <ProtectedRoute config={appConfig}><YearsPage /></ProtectedRoute>
+            } />
+            <Route path="/years/:year" element={
+              <ProtectedRoute config={appConfig}><YearsPage /></ProtectedRoute>
+            } />
             <Route path="/admin" element={
               <ProtectedRoute requiredRole="admin" config={appConfig}><AdminPage /></ProtectedRoute>
             } />
-            <Route path="/share/:token" element={<SharePage />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </main>

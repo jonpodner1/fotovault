@@ -25,6 +25,7 @@ const s3 = new S3Client({
 const BUCKET = process.env.WASABI_BUCKET;
 const IMPORT_PREFIX = 'imports/';
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic'];
+const YEAR_PATTERN = /^\d{4}-\d{2,4}$/;
 
 async function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
@@ -43,13 +44,68 @@ function normalizeAlbumName(raw) {
   }
 }
 
-async function findOrCreateAlbum(albumName) {
-  const snap = await db.collection('albums').get();
-  const normalized = albumName.toLowerCase().trim();
-  for (const doc of snap.docs) {
-    const existing = (doc.data().name || '').toLowerCase().trim();
-    if (existing === normalized) return doc.id;
+// Parse path — supports:
+//   imports/2025-2026/Boys Tennis/vs Bunker Hill/file.jpg  -> year, parent=Boys Tennis, child=vs Bunker Hill
+//   imports/2025-2026/Boys Tennis/file.jpg                 -> year, album=Boys Tennis, no parent
+//   imports/Boys Tennis/vs Bunker Hill/file.jpg            -> no year, parent=Boys Tennis, child=vs Bunker Hill
+//   imports/Boys Tennis/file.jpg                           -> no year, album=Boys Tennis
+function parsePath(relativePath) {
+  const parts = relativePath.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const first = normalizeAlbumName(parts[0]);
+  let schoolYear = '';
+  let rest = parts;
+
+  // Check if first segment is a year
+  if (YEAR_PATTERN.test(first)) {
+    schoolYear = first;
+    rest = parts.slice(1);
   }
+
+  if (rest.length < 2) return null;
+
+  const filename = rest[rest.length - 1];
+  // Must be an image file
+  if (!IMAGE_EXTS.some(ext => filename.toLowerCase().endsWith(ext))) return null;
+
+  if (rest.length === 2) {
+    // imports/[year/]AlbumName/file.jpg — no sub-album
+    return {
+      schoolYear,
+      parentName: null,
+      albumName: normalizeAlbumName(rest[0]),
+      filename,
+    };
+  }
+
+  // imports/[year/]ParentAlbum/SubAlbum/file.jpg — sub-album
+  return {
+    schoolYear,
+    parentName: normalizeAlbumName(rest[0]),
+    albumName: normalizeAlbumName(rest[1]),
+    filename,
+  };
+}
+
+// Find or create album — handles both top-level and sub-albums
+async function findOrCreateAlbum(albumName, schoolYear, parentId) {
+  const snap = await db.collection('albums').get();
+  const normalizedName = albumName.toLowerCase().trim();
+  const normalizedYear = (schoolYear || '').trim();
+  const normalizedParent = parentId || null;
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (
+      (data.name || '').toLowerCase().trim() === normalizedName &&
+      (data.schoolYear || '').trim() === normalizedYear &&
+      (data.parentId || null) === normalizedParent
+    ) {
+      return doc.id;
+    }
+  }
+
   const albumId = uuidv4();
   await db.collection('albums').doc(albumId).set({
     id: albumId,
@@ -57,13 +113,26 @@ async function findOrCreateAlbum(albumName) {
     description: '',
     tags: [],
     isPublic: false,
+    schoolYear: schoolYear || '',
+    parentId: parentId || null,
     photoCount: 0,
+    subAlbumCount: 0,
     createdBy: 'wasabi-sync',
     creatorName: 'Wasabi Sync',
     createdAt: new Date().toISOString(),
     coverPhotoUrl: null,
   });
-  console.log('Created album: ' + albumName);
+
+  // Increment parent's subAlbumCount
+  if (parentId) {
+    const parentRef = db.collection('albums').doc(parentId);
+    const parent = await parentRef.get();
+    if (parent.exists) {
+      await parentRef.update({ subAlbumCount: (parent.data().subAlbumCount || 0) + 1 });
+    }
+  }
+
+  console.log('Created album: ' + albumName + (schoolYear ? ' (' + schoolYear + ')' : '') + (parentId ? ' [sub]' : ''));
   return albumId;
 }
 
@@ -93,20 +162,21 @@ async function runSync() {
     return { ...results, message: 'No image files found in imports/ folder' };
   }
 
+  // Cache: albumCacheKey -> albumId
+  // Key format: "year||parentId||albumName" or "year||null||albumName"
   const albumCache = {};
 
   for (const obj of imageFiles) {
     try {
       const relativePath = obj.Key.replace(IMPORT_PREFIX, '');
-      const parts = relativePath.split('/');
+      const parsed = parsePath(relativePath);
 
-      if (parts.length < 2 || !parts[1]) {
+      if (!parsed) {
         results.skipped++;
         continue;
       }
 
-      const albumName = normalizeAlbumName(parts[0]);
-      const filename = parts[parts.length - 1];
+      const { schoolYear, parentName, albumName, filename } = parsed;
       const ext = filename.split('.').pop().toLowerCase();
 
       const duplicate = await alreadyImported(obj.Key);
@@ -115,16 +185,30 @@ async function runSync() {
         continue;
       }
 
-      if (!albumCache[albumName]) {
-        albumCache[albumName] = await findOrCreateAlbum(albumName);
+      // Resolve parent album first if needed
+      let parentId = null;
+      if (parentName) {
+        const parentCacheKey = schoolYear + '||null||' + parentName;
+        if (!albumCache[parentCacheKey]) {
+          albumCache[parentCacheKey] = await findOrCreateAlbum(parentName, schoolYear, null);
+        }
+        parentId = albumCache[parentCacheKey];
       }
-      const albumId = albumCache[albumName];
+
+      // Resolve the target album
+      const albumCacheKey = schoolYear + '||' + parentId + '||' + albumName;
+      if (!albumCache[albumCacheKey]) {
+        albumCache[albumCacheKey] = await findOrCreateAlbum(albumName, schoolYear, parentId);
+      }
+      const albumId = albumCache[albumCacheKey];
       results.albums[albumId] = albumName;
 
+      // Download from Wasabi
       const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: obj.Key });
       const response = await s3.send(getCmd);
       const buffer = await streamToBuffer(response.Body);
 
+      // Generate thumbnail
       const thumbBuffer = await sharp(buffer)
         .resize(400, 400, { fit: 'cover' })
         .webp({ quality: 80 })
@@ -139,14 +223,15 @@ async function runSync() {
         uploadFile({ key: thumbKey, buffer: thumbBuffer, mimetype: 'image/webp' }),
       ]);
 
-      // Count existing photos in album to get the next number for renaming
+      // Count existing photos for rename
       const existingSnap = await db.collection('photos')
         .where('albumId', '==', albumId)
         .where('status', '==', 'active')
         .get();
       const photoNumber = existingSnap.size + 1;
-      const renamedFilename = albumName + ' ' + photoNumber + '.' + ext;
-      const title = albumName + ' ' + photoNumber;
+      const displayName = albumName;
+      const renamedFilename = displayName + ' ' + photoNumber + '.' + ext;
+      const title = displayName + ' ' + photoNumber;
 
       await db.collection('photos').doc(photoId).set({
         id: photoId,
@@ -156,6 +241,8 @@ async function runSync() {
         title,
         mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext),
         albumId,
+        parentAlbumId: parentId || null,
+        schoolYear: schoolYear || '',
         tags: [],
         uploadedBy: 'wasabi-sync',
         uploaderName: 'Wasabi Sync',
@@ -164,14 +251,26 @@ async function runSync() {
         createdAt: new Date().toISOString(),
       });
 
+      // Update album photo count
       const albumRef = db.collection('albums').doc(albumId);
       const album = await albumRef.get();
       await albumRef.update({ photoCount: (album.data().photoCount || 0) + 1 });
 
+      // Also set cover photo on parent if not set
+      if (parentId) {
+        const parentRef = db.collection('albums').doc(parentId);
+        const parentDoc = await parentRef.get();
+        if (parentDoc.exists && !parentDoc.data().coverPhotoUrl) {
+          const thumbUrl = 'thumbnails/' + albumId + '/' + photoId + '_thumb.webp';
+          await parentRef.update({ coverPhotoUrl: thumbUrl });
+        }
+      }
+
       await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key }));
 
       results.processed++;
-      console.log('Imported: ' + renamedFilename + ' into album: ' + albumName);
+      const path = (schoolYear ? schoolYear + '/' : '') + (parentName ? parentName + '/' : '') + albumName;
+      console.log('Imported: ' + renamedFilename + ' into: ' + path);
     } catch (err) {
       console.error('Sync error for', obj.Key, err.message);
       results.errors.push({ file: obj.Key, error: err.message });
@@ -181,7 +280,7 @@ async function runSync() {
   return results;
 }
 
-// ─── MANUAL SYNC TRIGGER (admin only) ────────────────────────────────────────
+// ─── MANUAL SYNC ─────────────────────────────────────────────────────────────
 router.post('/run', authenticate, requireRole('admin'), async (req, res) => {
   try {
     const results = await runSync();
@@ -192,7 +291,7 @@ router.post('/run', authenticate, requireRole('admin'), async (req, res) => {
   }
 });
 
-// ─── LIST PENDING (admin only) ────────────────────────────────────────────────
+// ─── LIST PENDING ─────────────────────────────────────────────────────────────
 router.get('/pending', authenticate, requireRole('admin'), async (req, res) => {
   try {
     const listCmd = new ListObjectsV2Command({ Bucket: BUCKET, Prefix: IMPORT_PREFIX });
@@ -221,20 +320,14 @@ router.get('/album-download/:albumId', authenticate, async (req, res) => {
 
     if (photosSnap.empty) return res.status(404).json({ error: 'No photos in this album' });
 
-    // Set headers for zip download
     const zipName = album.name.replace(/[^a-z0-9 _-]/gi, '_') + '.zip';
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="' + zipName + '"');
 
     const archive = archiver('zip', { zlib: { level: 6 } });
     archive.pipe(res);
+    archive.on('error', err => { if (!res.headersSent) res.status(500).end(); });
 
-    archive.on('error', err => {
-      console.error('Archive error:', err);
-      if (!res.headersSent) res.status(500).end();
-    });
-
-    // Stream each photo from Wasabi into the zip
     let counter = 1;
     for (const doc of photosSnap.docs) {
       const photo = doc.data();
@@ -243,8 +336,7 @@ router.get('/album-download/:albumId', authenticate, async (req, res) => {
         const response = await s3.send(cmd);
         const buffer = await streamToBuffer(response.Body);
         const ext = (photo.filename || 'photo.jpg').split('.').pop().toLowerCase();
-        const zipFilename = album.name + ' ' + counter + '.' + ext;
-        archive.append(buffer, { name: zipFilename });
+        archive.append(buffer, { name: album.name + ' ' + counter + '.' + ext });
         counter++;
       } catch (err) {
         console.error('Failed to add photo to zip:', photo.id, err.message);
@@ -254,9 +346,7 @@ router.get('/album-download/:albumId', authenticate, async (req, res) => {
     await archive.finalize();
   } catch (err) {
     console.error(err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Failed to prepare album download' });
-    }
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to prepare album download' });
   }
 });
 

@@ -27,6 +27,9 @@ export default function Navbar({ appName, logoUrl }) {
         <NavLink to="/albums" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
           Albums
         </NavLink>
+        <NavLink to="/years" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+          Years
+        </NavLink>
         {isAdmin && (
           <NavLink to="/admin" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
             Admin

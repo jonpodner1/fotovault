@@ -1,43 +1,74 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import ShareModal from '../components/ShareModal';
 
 export default function AlbumsPage() {
+  const { albumId } = useParams();
   const { isEditor, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [albums, setAlbums] = useState([]);
+  const [subAlbums, setSubAlbums] = useState([]);
+  const [parentAlbum, setParentAlbum] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbum, setNewAlbum] = useState({ name: '', description: '', tags: '' });
   const [shareTarget, setShareTarget] = useState(null);
   const [downloading, setDownloading] = useState(null);
 
-  const fetchAlbums = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get('/albums');
-      setAlbums(res.data.albums);
-    } finally { setLoading(false); }
-  };
-
-  useEffect(() => { fetchAlbums(); }, []);
+  useEffect(() => {
+    if (albumId) {
+      // Viewing sub-albums of a specific album
+      setLoading(true);
+      Promise.all([
+        api.get('/albums/' + albumId),
+        api.get('/albums/' + albumId + '/subalbums'),
+      ]).then(([parentRes, subRes]) => {
+        setParentAlbum(parentRes.data);
+        setSubAlbums(subRes.data.subAlbums);
+      }).catch(console.error)
+        .finally(() => setLoading(false));
+    } else {
+      // Top-level albums
+      setParentAlbum(null);
+      setLoading(true);
+      api.get('/albums').then(r => setAlbums(r.data.albums))
+        .catch(console.error)
+        .finally(() => setLoading(false));
+    }
+  }, [albumId]);
 
   const createAlbum = async (e) => {
     e.preventDefault();
     const tags = newAlbum.tags.split(',').map(t => t.trim()).filter(Boolean);
-    await api.post('/albums', { ...newAlbum, tags });
+    await api.post('/albums', {
+      ...newAlbum,
+      tags,
+      parentId: albumId || null,
+      schoolYear: parentAlbum?.schoolYear || '',
+    });
     setNewAlbum({ name: '', description: '', tags: '' });
     setShowCreate(false);
-    fetchAlbums();
+    // Refresh
+    if (albumId) {
+      const res = await api.get('/albums/' + albumId + '/subalbums');
+      setSubAlbums(res.data.subAlbums);
+    } else {
+      const res = await api.get('/albums');
+      setAlbums(res.data.albums);
+    }
   };
 
   const deleteAlbum = async (id) => {
     if (!window.confirm('Delete this album? It must be empty first.')) return;
     try {
-      await api.delete(`/albums/${id}`);
-      setAlbums(prev => prev.filter(a => a.id !== id));
+      await api.delete('/albums/' + id);
+      if (albumId) {
+        setSubAlbums(prev => prev.filter(a => a.id !== id));
+      } else {
+        setAlbums(prev => prev.filter(a => a.id !== id));
+      }
     } catch (err) {
       alert(err.response?.data?.error || 'Delete failed');
     }
@@ -50,13 +81,8 @@ export default function AlbumsPage() {
       const token = await auth.currentUser.getIdToken();
       const apiUrl = process.env.REACT_APP_API_URL || '';
       const url = apiUrl + '/api/sync/album-download/' + album.id;
-
-      const response = await fetch(url, {
-        headers: { Authorization: 'Bearer ' + token }
-      });
-
+      const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
       if (!response.ok) throw new Error('Download failed');
-
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -73,20 +99,54 @@ export default function AlbumsPage() {
     }
   };
 
+  const handleAlbumClick = (album) => {
+    if (album.subAlbumCount > 0) {
+      // Has sub-albums — go to sub-album view
+      navigate('/albums/' + album.id);
+    } else {
+      // No sub-albums — go straight to photos
+      navigate('/?album=' + album.id);
+    }
+  };
+
+  const displayAlbums = albumId ? subAlbums : albums;
+
   return (
     <div className="albums-page">
       <div className="albums-header">
-        <h2>Albums</h2>
+        {albumId && parentAlbum ? (
+          <div className="albums-breadcrumb">
+            <button className="btn-ghost small" onClick={() => navigate('/albums')}>← All Albums</button>
+            <h2>{parentAlbum.name}</h2>
+            {parentAlbum.schoolYear && (
+              <span className="year-badge">{parentAlbum.schoolYear}</span>
+            )}
+          </div>
+        ) : (
+          <h2>Albums</h2>
+        )}
         {isEditor && (
           <button className="btn-primary" onClick={() => setShowCreate(!showCreate)}>
-            + New Album
+            + {albumId ? 'New Sub-Album' : 'New Album'}
           </button>
         )}
       </div>
 
+      {/* View photos directly in parent album if any */}
+      {albumId && parentAlbum && (
+        <div className="parent-album-actions">
+          <button
+            className="btn-ghost"
+            onClick={() => navigate('/?album=' + albumId)}
+          >
+            View all photos in {parentAlbum.name} →
+          </button>
+        </div>
+      )}
+
       {showCreate && (
         <form className="create-album-form" onSubmit={createAlbum}>
-          <input placeholder="Album name" value={newAlbum.name} required
+          <input placeholder={albumId ? 'Sub-album name (e.g. vs Bunker Hill)' : 'Album name'} value={newAlbum.name} required
             onChange={e => setNewAlbum({ ...newAlbum, name: e.target.value })} />
           <input placeholder="Description (optional)" value={newAlbum.description}
             onChange={e => setNewAlbum({ ...newAlbum, description: e.target.value })} />
@@ -103,15 +163,15 @@ export default function AlbumsPage() {
         <div className="loading-grid">
           {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card tall" />)}
         </div>
-      ) : albums.length === 0 ? (
+      ) : displayAlbums.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">◻</div>
-          <p>No albums yet.{isEditor ? ' Create one above.' : ''}</p>
+          <p>{albumId ? 'No sub-albums yet.' : 'No albums yet.'}{isEditor ? ' Create one above.' : ''}</p>
         </div>
       ) : (
         <div className="albums-grid">
-          {albums.map(album => (
-            <div key={album.id} className="album-card" onClick={() => navigate(`/?album=${album.id}`)}>
+          {displayAlbums.map(album => (
+            <div key={album.id} className="album-card" onClick={() => handleAlbumClick(album)}>
               <div className="album-cover">
                 {album.coverPhotoUrl
                   ? <img src={album.coverPhotoUrl} alt={album.name} />
@@ -123,10 +183,13 @@ export default function AlbumsPage() {
                 {album.description && <p>{album.description}</p>}
                 <div className="album-meta">
                   <span>{album.photoCount || 0} photos</span>
-                  {album.tags?.length > 0 && (
-                    <div className="album-tags">
-                      {album.tags.map(t => <span key={t} className="tag-chip">#{t}</span>)}
-                    </div>
+                  {album.subAlbumCount > 0 && (
+                    <span style={{ marginLeft: 8, color: 'var(--accent)' }}>
+                      {album.subAlbumCount} sub-albums
+                    </span>
+                  )}
+                  {album.schoolYear && !albumId && (
+                    <span className="year-badge">{album.schoolYear}</span>
                   )}
                 </div>
               </div>
