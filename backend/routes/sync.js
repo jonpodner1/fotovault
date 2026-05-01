@@ -26,6 +26,27 @@ const BUCKET = process.env.WASABI_BUCKET;
 const IMPORT_PREFIX = 'imports/';
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic'];
 const YEAR_PATTERN = /^\d{4}-\d{2,4}$/;
+const BATCH_SIZE = 8;
+
+// ─── PROGRESS BAR ─────────────────────────────────────────────────────────────
+function progressBar(current, total, errors = 0) {
+  const pct = Math.floor((current / total) * 100);
+  const filled = Math.floor(pct / 2);
+  const empty = 50 - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const elapsed = Math.floor((Date.now() - progressBar._start) / 1000);
+  const rate = elapsed > 0 ? (current / elapsed).toFixed(1) : '0';
+  const remaining = current > 0 ? Math.ceil((total - current) / (current / elapsed)) : '?';
+  process.stdout.write(
+    '\r[' + bar + '] ' + pct + '% | ' +
+    current + '/' + total + ' photos | ' +
+    rate + '/s | ' +
+    (elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm' + (elapsed % 60) + 's') + ' elapsed | ' +
+    '~' + (remaining < 60 ? remaining + 's' : Math.floor(remaining / 60) + 'm' + (remaining % 60) + 's') + ' left | ' +
+    errors + ' errors   '
+  );
+}
+progressBar._start = Date.now();
 
 async function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
@@ -44,11 +65,6 @@ function normalizeAlbumName(raw) {
   }
 }
 
-// Parse path — supports:
-//   imports/2025-2026/Boys Tennis/vs Bunker Hill/file.jpg  -> year, parent=Boys Tennis, child=vs Bunker Hill
-//   imports/2025-2026/Boys Tennis/file.jpg                 -> year, album=Boys Tennis, no parent
-//   imports/Boys Tennis/vs Bunker Hill/file.jpg            -> no year, parent=Boys Tennis, child=vs Bunker Hill
-//   imports/Boys Tennis/file.jpg                           -> no year, album=Boys Tennis
 function parsePath(relativePath) {
   const parts = relativePath.split('/').filter(Boolean);
   if (parts.length < 2) return null;
@@ -57,7 +73,6 @@ function parsePath(relativePath) {
   let schoolYear = '';
   let rest = parts;
 
-  // Check if first segment is a year
   if (YEAR_PATTERN.test(first)) {
     schoolYear = first;
     rest = parts.slice(1);
@@ -66,29 +81,15 @@ function parsePath(relativePath) {
   if (rest.length < 2) return null;
 
   const filename = rest[rest.length - 1];
-  // Must be an image file
   if (!IMAGE_EXTS.some(ext => filename.toLowerCase().endsWith(ext))) return null;
 
   if (rest.length === 2) {
-    // imports/[year/]AlbumName/file.jpg — no sub-album
-    return {
-      schoolYear,
-      parentName: null,
-      albumName: normalizeAlbumName(rest[0]),
-      filename,
-    };
+    return { schoolYear, parentName: null, albumName: normalizeAlbumName(rest[0]), filename };
   }
 
-  // imports/[year/]ParentAlbum/SubAlbum/file.jpg — sub-album
-  return {
-    schoolYear,
-    parentName: normalizeAlbumName(rest[0]),
-    albumName: normalizeAlbumName(rest[1]),
-    filename,
-  };
+  return { schoolYear, parentName: normalizeAlbumName(rest[0]), albumName: normalizeAlbumName(rest[1]), filename };
 }
 
-// Find or create album — handles both top-level and sub-albums
 async function findOrCreateAlbum(albumName, schoolYear, parentId) {
   const snap = await db.collection('albums').get();
   const normalizedName = albumName.toLowerCase().trim();
@@ -123,7 +124,6 @@ async function findOrCreateAlbum(albumName, schoolYear, parentId) {
     coverPhotoUrl: null,
   });
 
-  // Increment parent's subAlbumCount
   if (parentId) {
     const parentRef = db.collection('albums').doc(parentId);
     const parent = await parentRef.get();
@@ -132,7 +132,7 @@ async function findOrCreateAlbum(albumName, schoolYear, parentId) {
     }
   }
 
-  console.log('Created album: ' + albumName + (schoolYear ? ' (' + schoolYear + ')' : '') + (parentId ? ' [sub]' : ''));
+  console.log('\nCreated album: ' + albumName + (schoolYear ? ' (' + schoolYear + ')' : '') + (parentId ? ' [sub]' : ''));
   return albumId;
 }
 
@@ -143,17 +143,141 @@ async function alreadyImported(importKey) {
   return !snap.empty;
 }
 
+async function processPhoto(obj, albumCache, results, total) {
+  try {
+    const relativePath = obj.Key.replace(IMPORT_PREFIX, '');
+    const parsed = parsePath(relativePath);
+
+    if (!parsed) {
+      results.skipped++;
+      progressBar(results.processed + results.skipped, total, results.errors.length);
+      return;
+    }
+
+    const { schoolYear, parentName, albumName, filename } = parsed;
+    const ext = filename.split('.').pop().toLowerCase();
+
+    const duplicate = await alreadyImported(obj.Key);
+    if (duplicate) {
+      results.skipped++;
+      progressBar(results.processed + results.skipped, total, results.errors.length);
+      return;
+    }
+
+    // Resolve parent album
+    let parentId = null;
+    if (parentName) {
+      const parentCacheKey = schoolYear + '||null||' + parentName;
+      if (!albumCache[parentCacheKey]) {
+        albumCache[parentCacheKey] = await findOrCreateAlbum(parentName, schoolYear, null);
+      }
+      parentId = albumCache[parentCacheKey];
+    }
+
+    // Resolve target album
+    const albumCacheKey = schoolYear + '||' + parentId + '||' + albumName;
+    if (!albumCache[albumCacheKey]) {
+      albumCache[albumCacheKey] = await findOrCreateAlbum(albumName, schoolYear, parentId);
+    }
+    const albumId = albumCache[albumCacheKey];
+    results.albums[albumId] = albumName;
+
+    // Download from Wasabi
+    const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: obj.Key });
+    const response = await s3.send(getCmd);
+    const buffer = await streamToBuffer(response.Body);
+
+    // Generate thumbnail
+    const thumbBuffer = await sharp(buffer)
+      .resize(400, 400, { fit: 'cover' })
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    const photoId = uuidv4();
+    const newKey = 'photos/' + albumId + '/' + photoId + '.' + ext;
+    const thumbKey = 'thumbnails/' + albumId + '/' + photoId + '_thumb.webp';
+
+    await Promise.all([
+      uploadFile({ key: newKey, buffer, mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext) }),
+      uploadFile({ key: thumbKey, buffer: thumbBuffer, mimetype: 'image/webp' }),
+    ]);
+
+    // Count existing photos for rename
+    const existingSnap = await db.collection('photos')
+      .where('albumId', '==', albumId)
+      .where('status', '==', 'active')
+      .get();
+    const photoNumber = existingSnap.size + 1;
+    const renamedFilename = albumName + ' ' + photoNumber + '.' + ext;
+    const title = albumName + ' ' + photoNumber;
+
+    await db.collection('photos').doc(photoId).set({
+      id: photoId,
+      key: newKey,
+      thumbKey,
+      filename: renamedFilename,
+      title,
+      mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext),
+      albumId,
+      parentAlbumId: parentId || null,
+      schoolYear: schoolYear || '',
+      tags: [],
+      uploadedBy: 'wasabi-sync',
+      uploaderName: 'Wasabi Sync',
+      importedFrom: obj.Key,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    });
+
+    const albumRef = db.collection('albums').doc(albumId);
+    const album = await albumRef.get();
+    await albumRef.update({ photoCount: (album.data().photoCount || 0) + 1 });
+
+    if (parentId) {
+      const parentRef = db.collection('albums').doc(parentId);
+      const parentDoc = await parentRef.get();
+      if (parentDoc.exists && !parentDoc.data().coverPhotoUrl) {
+        await parentRef.update({ coverPhotoUrl: thumbKey });
+      }
+    }
+
+    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key }));
+
+    results.processed++;
+    progressBar(results.processed + results.skipped, total, results.errors.length);
+  } catch (err) {
+    console.error('\nSync error for', obj.Key, err.message);
+    results.errors.push({ file: obj.Key, error: err.message });
+    progressBar(results.processed + results.skipped, total, results.errors.length);
+  }
+}
+
 async function runSync() {
   const results = { processed: 0, skipped: 0, errors: [], albums: {} };
+  progressBar._start = Date.now();
 
-  const listCmd = new ListObjectsV2Command({ Bucket: BUCKET, Prefix: IMPORT_PREFIX });
-  const listed = await s3.send(listCmd);
+  // Paginate through ALL objects — Wasabi returns max 1000 per page
+  let allContents = [];
+  let continuationToken = null;
+  do {
+    const listCmd = new ListObjectsV2Command({
+      Bucket: BUCKET,
+      Prefix: IMPORT_PREFIX,
+      ContinuationToken: continuationToken,
+    });
+    const listed = await s3.send(listCmd);
+    allContents = allContents.concat(listed.Contents || []);
+    continuationToken = listed.IsTruncated ? listed.NextContinuationToken : null;
+    if (continuationToken) {
+      console.log('Listed ' + allContents.length + ' files so far, fetching more...');
+    }
+  } while (continuationToken);
 
-  if (!listed.Contents || listed.Contents.length === 0) {
+  if (allContents.length === 0) {
     return { ...results, message: 'No files found in imports/ folder' };
   }
 
-  const imageFiles = listed.Contents.filter(obj => {
+  const imageFiles = allContents.filter(obj => {
     const key = obj.Key.toLowerCase();
     return IMAGE_EXTS.some(ext => key.endsWith(ext)) && obj.Key !== IMPORT_PREFIX;
   });
@@ -162,141 +286,52 @@ async function runSync() {
     return { ...results, message: 'No image files found in imports/ folder' };
   }
 
-  // Cache: albumCacheKey -> albumId
-  // Key format: "year||parentId||albumName" or "year||null||albumName"
+  console.log('\nStarting sync of ' + imageFiles.length + ' files in batches of ' + BATCH_SIZE);
+  console.log('Run this to watch progress:');
+  console.log('pm2 logs fotovault-api --raw | grep -v "^$"');
+  console.log('');
+
   const albumCache = {};
 
-  for (const obj of imageFiles) {
-    try {
-      const relativePath = obj.Key.replace(IMPORT_PREFIX, '');
-      const parsed = parsePath(relativePath);
-
-      if (!parsed) {
-        results.skipped++;
-        continue;
-      }
-
-      const { schoolYear, parentName, albumName, filename } = parsed;
-      const ext = filename.split('.').pop().toLowerCase();
-
-      const duplicate = await alreadyImported(obj.Key);
-      if (duplicate) {
-        results.skipped++;
-        continue;
-      }
-
-      // Resolve parent album first if needed
-      let parentId = null;
-      if (parentName) {
-        const parentCacheKey = schoolYear + '||null||' + parentName;
-        if (!albumCache[parentCacheKey]) {
-          albumCache[parentCacheKey] = await findOrCreateAlbum(parentName, schoolYear, null);
-        }
-        parentId = albumCache[parentCacheKey];
-      }
-
-      // Resolve the target album
-      const albumCacheKey = schoolYear + '||' + parentId + '||' + albumName;
-      if (!albumCache[albumCacheKey]) {
-        albumCache[albumCacheKey] = await findOrCreateAlbum(albumName, schoolYear, parentId);
-      }
-      const albumId = albumCache[albumCacheKey];
-      results.albums[albumId] = albumName;
-
-      // Download from Wasabi
-      const getCmd = new GetObjectCommand({ Bucket: BUCKET, Key: obj.Key });
-      const response = await s3.send(getCmd);
-      const buffer = await streamToBuffer(response.Body);
-
-      // Generate thumbnail
-      const thumbBuffer = await sharp(buffer)
-        .resize(400, 400, { fit: 'cover' })
-        .webp({ quality: 80 })
-        .toBuffer();
-
-      const photoId = uuidv4();
-      const newKey = 'photos/' + albumId + '/' + photoId + '.' + ext;
-      const thumbKey = 'thumbnails/' + albumId + '/' + photoId + '_thumb.webp';
-
-      await Promise.all([
-        uploadFile({ key: newKey, buffer, mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext) }),
-        uploadFile({ key: thumbKey, buffer: thumbBuffer, mimetype: 'image/webp' }),
-      ]);
-
-      // Count existing photos for rename
-      const existingSnap = await db.collection('photos')
-        .where('albumId', '==', albumId)
-        .where('status', '==', 'active')
-        .get();
-      const photoNumber = existingSnap.size + 1;
-      const displayName = albumName;
-      const renamedFilename = displayName + ' ' + photoNumber + '.' + ext;
-      const title = displayName + ' ' + photoNumber;
-
-      await db.collection('photos').doc(photoId).set({
-        id: photoId,
-        key: newKey,
-        thumbKey,
-        filename: renamedFilename,
-        title,
-        mimetype: 'image/' + (ext === 'jpg' ? 'jpeg' : ext),
-        albumId,
-        parentAlbumId: parentId || null,
-        schoolYear: schoolYear || '',
-        tags: [],
-        uploadedBy: 'wasabi-sync',
-        uploaderName: 'Wasabi Sync',
-        importedFrom: obj.Key,
-        status: 'active',
-        createdAt: new Date().toISOString(),
-      });
-
-      // Update album photo count
-      const albumRef = db.collection('albums').doc(albumId);
-      const album = await albumRef.get();
-      await albumRef.update({ photoCount: (album.data().photoCount || 0) + 1 });
-
-      // Also set cover photo on parent if not set
-      if (parentId) {
-        const parentRef = db.collection('albums').doc(parentId);
-        const parentDoc = await parentRef.get();
-        if (parentDoc.exists && !parentDoc.data().coverPhotoUrl) {
-          const thumbUrl = 'thumbnails/' + albumId + '/' + photoId + '_thumb.webp';
-          await parentRef.update({ coverPhotoUrl: thumbUrl });
-        }
-      }
-
-      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key }));
-
-      results.processed++;
-      const path = (schoolYear ? schoolYear + '/' : '') + (parentName ? parentName + '/' : '') + albumName;
-      console.log('Imported: ' + renamedFilename + ' into: ' + path);
-    } catch (err) {
-      console.error('Sync error for', obj.Key, err.message);
-      results.errors.push({ file: obj.Key, error: err.message });
-    }
+  for (let i = 0; i < imageFiles.length; i += BATCH_SIZE) {
+    const batch = imageFiles.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(obj => processPhoto(obj, albumCache, results, imageFiles.length)));
+    await new Promise(r => setTimeout(r, 200));
   }
 
+  process.stdout.write('\n');
+  console.log('✓ Sync complete: ' + results.processed + ' imported, ' + results.skipped + ' skipped, ' + results.errors.length + ' errors');
   return results;
 }
 
-// ─── MANUAL SYNC ─────────────────────────────────────────────────────────────
+// ─── MANUAL SYNC (background - returns immediately) ───────────────────────────
 router.post('/run', authenticate, requireRole('admin'), async (req, res) => {
-  try {
-    const results = await runSync();
-    res.json({ success: true, ...results });
-  } catch (err) {
-    console.error('Sync failed:', err);
-    res.status(500).json({ error: 'Sync failed', detail: err.message });
-  }
+  res.json({ success: true, message: 'Sync started in background. Watch progress in terminal.' });
+
+  runSync().then(results => {
+    console.log('Background sync complete: ' + results.processed + ' imported, ' + results.skipped + ' skipped, ' + results.errors.length + ' errors');
+  }).catch(err => {
+    console.error('Background sync failed:', err.message);
+  });
 });
 
-// ─── LIST PENDING ─────────────────────────────────────────────────────────────
+// ─── LIST PENDING (paginated) ─────────────────────────────────────────────────
 router.get('/pending', authenticate, requireRole('admin'), async (req, res) => {
   try {
-    const listCmd = new ListObjectsV2Command({ Bucket: BUCKET, Prefix: IMPORT_PREFIX });
-    const listed = await s3.send(listCmd);
-    const pending = (listed.Contents || [])
+    let allContents = [];
+    let continuationToken = null;
+    do {
+      const listCmd = new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: IMPORT_PREFIX,
+        ContinuationToken: continuationToken,
+      });
+      const listed = await s3.send(listCmd);
+      allContents = allContents.concat(listed.Contents || []);
+      continuationToken = listed.IsTruncated ? listed.NextContinuationToken : null;
+    } while (continuationToken);
+
+    const pending = allContents
       .filter(obj => IMAGE_EXTS.some(ext => obj.Key.toLowerCase().endsWith(ext)) && obj.Key !== IMPORT_PREFIX)
       .map(obj => ({ key: obj.Key, size: obj.Size, lastModified: obj.LastModified }));
     res.json({ pending, count: pending.length });

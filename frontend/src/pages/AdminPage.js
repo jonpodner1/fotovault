@@ -229,10 +229,21 @@ export default function AdminPage() {
 	  {tab === 'Sync' && (
 		<div className="admin-section">
 		  <h3 style={{ marginBottom: 8 }}>Wasabi Import Sync</h3>
-		  <p style={{ color: 'var(--text-2)', fontSize: '0.9rem', marginBottom: 20 }}>
-			Drop photos into your Wasabi bucket under imports/AlbumName/photo.jpg and sync them here.
-			Albums are auto-created if they do not exist. Auto-sync runs every 15 minutes.
-		  </p>
+			<p style={{ color: 'var(--text-2)', fontSize: '0.9rem', marginBottom: 12 }}>
+			  Drop photos into your Wasabi bucket under imports/2025-2026/Album Name/photo.jpg and sync them here.
+			  Albums are auto-created if they do not exist.
+			</p>
+			<div style={{
+			  background: 'var(--bg-3)', border: '1px solid var(--border)',
+			  borderRadius: 6, padding: '12px 16px', marginBottom: 20,
+			}}>
+			  <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginBottom: 6 }}>
+				📟 To watch sync progress in real time, SSH into the server and run:
+			  </p>
+			  <code style={{ fontSize: '0.85rem', color: 'var(--green)', display: 'block' }}>
+				pm2 logs fotovault-api --raw
+			  </code>
+			</div>
 	<div className="toggle-group" style={{ marginBottom: 20 }}>
 		<label className="toggle-label">
 		  <input
