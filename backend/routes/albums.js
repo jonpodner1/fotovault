@@ -3,6 +3,17 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../services/firebase');
 const { authenticate, requireRole } = require('../middleware/auth');
+const { getPresignedUrl } = require('../services/wasabi');
+
+async function attachCoverUrl(album) {
+  if (!album.coverPhotoUrl) return album;
+  try {
+    const url = await getPresignedUrl(album.coverPhotoUrl, 86400); // 24 hour URL
+    return { ...album, coverPhotoUrl: url };
+  } catch {
+    return { ...album, coverPhotoUrl: null };
+  }
+}
 
 // ─── CREATE ALBUM (editor+) ───────────────────────────────────────────────────
 router.post('/', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
@@ -40,19 +51,22 @@ router.post('/', authenticate, requireRole(['admin', 'editor']), async (req, res
   }
 });
 
-// ─── LIST TOP-LEVEL ALBUMS (in-memory filter, no composite index needed) ──────
+// ─── LIST TOP-LEVEL ALBUMS ────────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {
     const { schoolYear } = req.query;
     const snapshot = await db.collection('albums').orderBy('createdAt', 'desc').get();
     let albums = snapshot.docs.map(doc => doc.data());
 
-    // Top-level only — parentId is null, undefined, or empty string
+    // Top-level only
     albums = albums.filter(a => !a.parentId);
 
     if (schoolYear) {
       albums = albums.filter(a => a.schoolYear === schoolYear);
     }
+
+    // Attach presigned cover URLs in parallel
+    albums = await Promise.all(albums.map(attachCoverUrl));
 
     res.json({ albums });
   } catch (err) {
@@ -77,14 +91,18 @@ router.get('/years/list', authenticate, async (req, res) => {
   }
 });
 
-// ─── GET SUB-ALBUMS OF A PARENT (in-memory filter) ───────────────────────────
+// ─── GET SUB-ALBUMS OF A PARENT ───────────────────────────────────────────────
 router.get('/:albumId/subalbums', authenticate, async (req, res) => {
   try {
     const snapshot = await db.collection('albums').get();
-    const subAlbums = snapshot.docs
+    let subAlbums = snapshot.docs
       .map(doc => doc.data())
       .filter(a => a.parentId === req.params.albumId)
       .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+
+    // Attach presigned cover URLs
+    subAlbums = await Promise.all(subAlbums.map(attachCoverUrl));
+
     res.json({ subAlbums });
   } catch (err) {
     console.error(err);
@@ -97,7 +115,8 @@ router.get('/:albumId', authenticate, async (req, res) => {
   try {
     const doc = await db.collection('albums').doc(req.params.albumId).get();
     if (!doc.exists) return res.status(404).json({ error: 'Album not found' });
-    res.json(doc.data());
+    const album = await attachCoverUrl(doc.data());
+    res.json(album);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch album' });
   }
