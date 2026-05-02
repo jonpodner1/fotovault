@@ -22,7 +22,6 @@ router.post('/upload-url', authenticate, requireRole(['admin', 'editor']), async
 
     const uploadUrl = await getPresignedUploadUrl(key, mimetype);
 
-    // Pre-create Firestore document as "pending"
     await db.collection('photos').doc(photoId).set({
       id: photoId,
       key,
@@ -44,13 +43,12 @@ router.post('/upload-url', authenticate, requireRole(['admin', 'editor']), async
   }
 });
 
-// ─── CONFIRM UPLOAD + GENERATE THUMBNAIL (editor+) ───────────────────────────
+// ─── CONFIRM UPLOAD (editor+) ─────────────────────────────────────────────────
 router.post('/confirm/:photoId', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
   try {
     const { photoId } = req.params;
     const photoDoc = await db.collection('photos').doc(photoId).get();
     if (!photoDoc.exists) return res.status(404).json({ error: 'Photo not found' });
-
     await db.collection('photos').doc(photoId).update({ status: 'active' });
     res.json({ success: true });
   } catch (err) {
@@ -70,13 +68,13 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
     const key = `photos/${albumId || 'uncategorized'}/${photoId}.${ext}`;
     const thumbKey = `thumbnails/${albumId || 'uncategorized'}/${photoId}_thumb.webp`;
 
-    // Generate thumbnail with sharp
+    // Auto-rotate based on EXIF orientation (fixes sideways photos)
     const thumbBuffer = await sharp(req.file.buffer)
+      .rotate()
       .resize(400, 400, { fit: 'cover' })
       .webp({ quality: 80 })
       .toBuffer();
 
-    // Upload original + thumbnail in parallel
     await Promise.all([
       uploadFile({ key, buffer: req.file.buffer, mimetype: req.file.mimetype }),
       uploadFile({ key: thumbKey, buffer: thumbBuffer, mimetype: 'image/webp' }),
@@ -84,7 +82,6 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
 
     const parsedTags = JSON.parse(tags);
 
-    // Save metadata to Firestore
     const photoData = {
       id: photoId,
       key,
@@ -103,7 +100,6 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
 
     await db.collection('photos').doc(photoId).set(photoData);
 
-    // Update album photo count
     if (albumId) {
       const albumRef = db.collection('albums').doc(albumId);
       const album = await albumRef.get();
@@ -119,15 +115,28 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
   }
 });
 
-// ─── LIST PHOTOS ──────────────────────────────────────────────────────────────
+// ─── LIST PHOTOS (with cursor-based pagination) ───────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { albumId, tag, limit = 50, startAfter } = req.query;
-    let query = db.collection('photos').where('status', '==', 'active').orderBy('createdAt', 'desc');
+    const { albumId, tag, limit = 50, cursor } = req.query;
+    const pageSize = Math.min(parseInt(limit), 100);
+
+    let query = db.collection('photos')
+      .where('status', '==', 'active')
+      .orderBy('createdAt', 'desc');
 
     if (albumId) query = query.where('albumId', '==', albumId);
     if (tag) query = query.where('tags', 'array-contains', tag);
-    query = query.limit(parseInt(limit));
+
+    // If cursor provided, start after that document
+    if (cursor) {
+      const cursorDoc = await db.collection('photos').doc(cursor).get();
+      if (cursorDoc.exists) {
+        query = query.startAfter(cursorDoc);
+      }
+    }
+
+    query = query.limit(pageSize);
 
     const snapshot = await query.get();
     const photos = snapshot.docs.map(doc => doc.data());
@@ -140,7 +149,15 @@ router.get('/', authenticate, async (req, res) => {
       }))
     );
 
-    res.json({ photos: photosWithUrls });
+    // Return the last doc ID as the next cursor
+    const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+    const nextCursor = snapshot.docs.length === pageSize ? lastDoc?.id : null;
+
+    res.json({
+      photos: photosWithUrls,
+      nextCursor,
+      hasMore: !!nextCursor,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch photos' });
@@ -175,7 +192,6 @@ router.patch('/:photoId', authenticate, requireRole(['admin', 'editor']), async 
     if (tags !== undefined) updates.tags = tags;
     if (albumId !== undefined) updates.albumId = albumId;
     updates.updatedAt = new Date().toISOString();
-
     await db.collection('photos').doc(req.params.photoId).update(updates);
     res.json({ success: true });
   } catch (err) {
@@ -191,14 +207,12 @@ router.delete('/:photoId', authenticate, requireRole('admin'), async (req, res) 
 
     const photo = doc.data();
 
-    // Delete from Wasabi + Firestore in parallel
     await Promise.all([
       deleteFile(photo.key),
       photo.thumbKey ? deleteFile(photo.thumbKey) : Promise.resolve(),
       db.collection('photos').doc(req.params.photoId).delete(),
     ]);
 
-    // Decrement album count
     if (photo.albumId) {
       const albumRef = db.collection('albums').doc(photo.albumId);
       const album = await albumRef.get();

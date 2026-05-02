@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,28 +14,70 @@ export default function GalleryPage() {
   const [albums, setAlbums] = useState([]);
   const [years, setYears] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [nextCursor, setNextCursor] = useState(null);
   const [showUpload, setShowUpload] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [shareTarget, setShareTarget] = useState(null);
+  const observerRef = useRef(null);
+  const sentinelRef = useRef(null);
 
   const albumFilter = searchParams.get('album') || '';
   const tagFilter = searchParams.get('tag') || '';
   const yearFilter = searchParams.get('year') || '';
 
-  const fetchPhotos = async () => {
+  // Fetch first page
+  const fetchPhotos = useCallback(async () => {
     setLoading(true);
+    setPhotos([]);
+    setNextCursor(null);
+    setHasMore(true);
     try {
-      const params = {};
+      const params = { limit: 50 };
       if (albumFilter) params.albumId = albumFilter;
       if (tagFilter) params.tag = tagFilter;
       const res = await api.get('/photos', { params });
       setPhotos(res.data.photos);
+      setNextCursor(res.data.nextCursor);
+      setHasMore(res.data.hasMore);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [albumFilter, tagFilter]);
+
+  // Fetch next page
+  const fetchMore = useCallback(async () => {
+    if (loadingMore || !hasMore || !nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const params = { limit: 50, cursor: nextCursor };
+      if (albumFilter) params.albumId = albumFilter;
+      if (tagFilter) params.tag = tagFilter;
+      const res = await api.get('/photos', { params });
+      setPhotos(prev => [...prev, ...res.data.photos]);
+      setNextCursor(res.data.nextCursor);
+      setHasMore(res.data.hasMore);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, nextCursor, albumFilter, tagFilter]);
+
+  // Intersection observer for infinite scroll
+  useEffect(() => {
+    if (observerRef.current) observerRef.current.disconnect();
+    observerRef.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore && !loadingMore) {
+        fetchMore();
+      }
+    }, { threshold: 0.1 });
+    if (sentinelRef.current) observerRef.current.observe(sentinelRef.current);
+    return () => observerRef.current?.disconnect();
+  }, [fetchMore, hasMore, loadingMore]);
 
   const fetchAlbums = async () => {
     try {
@@ -97,7 +139,6 @@ export default function GalleryPage() {
       } else {
         prev.delete(key);
       }
-      // When changing year, clear album filter
       if (key === 'year') prev.delete('album');
       return prev;
     });
@@ -109,7 +150,6 @@ export default function GalleryPage() {
     <div className="gallery-page">
       <div className="gallery-header">
         <div className="gallery-filters">
-          {/* Year filter */}
           {years.length > 0 && (
             <select
               value={yearFilter}
@@ -121,7 +161,6 @@ export default function GalleryPage() {
             </select>
           )}
 
-          {/* Album filter */}
           <select
             value={albumFilter}
             onChange={e => setParam('album', e.target.value)}
@@ -131,7 +170,6 @@ export default function GalleryPage() {
             {albums.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
 
-          {/* Tag filters */}
           {allTags.length > 0 && (
             <div className="tag-filters">
               {allTags.map(tag => (
@@ -159,13 +197,29 @@ export default function GalleryPage() {
           {[...Array(12)].map((_, i) => <div key={i} className="skeleton-card" />)}
         </div>
       ) : (
-        <PhotoGrid
-          photos={photos}
-          onPhotoClick={setLightboxPhoto}
-          onDownload={handleDownload}
-          onDelete={handleDelete}
-          onShare={handleShare}
-        />
+        <>
+          <PhotoGrid
+            photos={photos}
+            onPhotoClick={setLightboxPhoto}
+            onDownload={handleDownload}
+            onDelete={handleDelete}
+            onShare={handleShare}
+          />
+
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} style={{ height: 40, margin: '20px 0' }}>
+            {loadingMore && (
+              <div className="loading-grid" style={{ marginTop: 0 }}>
+                {[...Array(6)].map((_, i) => <div key={i} className="skeleton-card" />)}
+              </div>
+            )}
+            {!hasMore && photos.length > 0 && (
+              <p style={{ textAlign: 'center', color: 'var(--text-3)', fontSize: '0.85rem', padding: '20px 0' }}>
+                All {photos.length} photos loaded
+              </p>
+            )}
+          </div>
+        </>
       )}
 
       {showUpload && (
