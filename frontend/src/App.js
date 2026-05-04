@@ -13,6 +13,8 @@ import YearsPage from './pages/YearsPage';
 import SharePage from './pages/SharePage';
 import api from './utils/api';
 import './styles.css';
+import { analytics } from './firebase';
+import { logEvent } from 'firebase/analytics';
 
 export const ConfigContext = React.createContext({});
 
@@ -25,6 +27,12 @@ function AppShell() {
 
   const isAuthPage = ['/login', '/register'].includes(location.pathname);
   const isSharePage = location.pathname.startsWith('/share/');
+  
+  useEffect(() => {
+    if (user) {
+      logEvent(analytics, 'login', { method: 'email' });
+    }
+  }, [user]);
 
   useEffect(() => {
     api.get('/config').then(r => {
