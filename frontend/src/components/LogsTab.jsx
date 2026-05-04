@@ -71,17 +71,27 @@ export default function LogsTab() {
     }
   };
 
-  const handleDownload = () => {
-    const { auth } = require('../firebase');
-    auth.currentUser.getIdToken().then(token => {
+  const handleDownload = async () => {
+    try {
+      const { auth } = await import('../firebase');
+      const token = await auth.currentUser.getIdToken();
       const apiUrl = process.env.REACT_APP_API_URL || '';
+      const response = await fetch(apiUrl + '/api/logs/' + selectedDate + '/download', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      if (!response.ok) throw new Error('Download failed');
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = apiUrl + '/api/logs/' + selectedDate + '/download';
+      link.href = blobUrl;
       link.download = 'fotovault-logs-' + selectedDate + '.csv';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    });
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      alert('Download failed: ' + err.message);
+    }
   };
 
   const uniqueUsers = [...new Set(events.map(e => e.user_email).filter(Boolean))];
