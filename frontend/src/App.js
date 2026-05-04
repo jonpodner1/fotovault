@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
+import PolicyModal from './components/PolicyModal';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import GalleryPage from './pages/GalleryPage';
@@ -20,6 +21,8 @@ function AppShell() {
   const location = useLocation();
   const [appConfig, setAppConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+
   const isAuthPage = ['/login', '/register'].includes(location.pathname);
   const isSharePage = location.pathname.startsWith('/share/');
 
@@ -40,11 +43,15 @@ function AppShell() {
     return <div className="full-loading"><span className="logo-icon spin">◈</span></div>;
   }
 
+  // Show policy modal to logged-in users who haven't accepted yet
+  // Don't show on auth pages or share pages
+  const showPolicy = user && !isAuthPage && !isSharePage && !policyAccepted;
+
   return (
     <ConfigContext.Provider value={appConfig || {}}>
       <div className="app">
         {user && !isAuthPage && !isSharePage && (
-          <Navbar appName={appConfig?.appName || 'FotoVault'} logoUrl={appConfig?.logoUrl} />
+          <Navbar appName={appConfig?.appName || 'MCHS Photos'} logoUrl={appConfig?.logoUrl} />
         )}
         <main className="main-content">
           <Routes>
@@ -73,6 +80,7 @@ function AppShell() {
           </Routes>
         </main>
       </div>
+      {showPolicy && <PolicyModal onAccept={() => setPolicyAccepted(true)} />}
     </ConfigContext.Provider>
   );
 }

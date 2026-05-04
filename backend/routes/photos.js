@@ -136,7 +136,22 @@ router.get('/', authenticate, async (req, res) => {
       .where('status', '==', 'active')
       .orderBy('createdAt', 'desc');
 
-    if (albumId) query = query.where('albumId', '==', albumId);
+    if (albumId) {
+      // Check if this album has sub-albums
+      const albumsSnap = await db.collection('albums').get();
+      const subAlbumIds = albumsSnap.docs
+        .map(d => d.data())
+        .filter(a => a.parentId === albumId)
+        .map(a => a.id);
+    
+      if (subAlbumIds.length > 0) {
+        // Include photos from all sub-albums too
+        const allAlbumIds = [albumId, ...subAlbumIds];
+        query = query.where('albumId', 'in', allAlbumIds);
+      } else {
+        query = query.where('albumId', '==', albumId);
+      }
+    }
     if (tag) query = query.where('tags', 'array-contains', tag);
 
     if (cursor) {

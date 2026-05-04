@@ -27,7 +27,7 @@ async function mergeDuplicates() {
 
     const winner = group[0];
     const losers = group.slice(1);
-    console.log('Merging into:', winner.name, '(' + winner.id + ')');
+    console.log('Merging into:', winner.name, '(' + winner.id + ') photos:', winner.photoCount, 'subAlbums:', winner.subAlbumCount);
 
     for (const loser of losers) {
       const photosSnap = await db.collection('photos').where('albumId', '==', loser.id).get();
@@ -36,28 +36,31 @@ async function mergeDuplicates() {
         photosSnap.docs.forEach(doc => batch.update(doc.ref, { albumId: winner.id }));
         await batch.commit();
         totalMerged += photosSnap.size;
-        console.log('  Moved', photosSnap.size, 'photos');
+        console.log('  Moved', photosSnap.size, 'photos from', loser.id);
       }
+
       const allSnap = await db.collection('albums').get();
       const subs = allSnap.docs.filter(d => d.data().parentId === loser.id);
       if (subs.length > 0) {
         const batch = db.batch();
         subs.forEach(doc => batch.update(doc.ref, { parentId: winner.id }));
         await batch.commit();
-        console.log('  Moved', subs.length, 'sub-albums');
+        console.log('  Moved', subs.length, 'sub-albums from', loser.id);
       }
+
       await loser.docRef.delete();
       totalDeleted++;
-      console.log('  Deleted:', loser.id);
+      console.log('  Deleted duplicate:', loser.id);
     }
 
     const finalPhotos = await db.collection('photos').where('albumId', '==', winner.id).where('status', '==', 'active').get();
     const allSnap2 = await db.collection('albums').get();
     const subCount = allSnap2.docs.filter(d => d.data().parentId === winner.id).length;
     await winner.docRef.update({ photoCount: finalPhotos.size, subAlbumCount: subCount });
+    console.log('  Winner updated: photos=' + finalPhotos.size + ' subAlbums=' + subCount);
   }
 
-  console.log('Done! Merged', totalMerged, 'photos, deleted', totalDeleted, 'duplicate albums');
+  console.log('\nDone! Merged', totalMerged, 'photos, deleted', totalDeleted, 'duplicate albums');
   process.exit(0);
 }
 
