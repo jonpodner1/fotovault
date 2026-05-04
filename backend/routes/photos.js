@@ -9,6 +9,12 @@ const sharp = require('sharp');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+function getIP(req) {
+  return req.headers['cf-connecting-ip'] ||
+    (req.headers['x-forwarded-for'] || '').split(',')[0] ||
+    req.socket.remoteAddress || '';
+}
+
 // ─── GET PRESIGNED UPLOAD URL (editor+) ──────────────────────────────────────
 router.post('/upload-url', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
   try {
@@ -68,7 +74,6 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
     const key = `photos/${albumId || 'uncategorized'}/${photoId}.${ext}`;
     const thumbKey = `thumbnails/${albumId || 'uncategorized'}/${photoId}_thumb.webp`;
 
-    // Auto-rotate based on EXIF orientation (fixes sideways photos)
     const thumbBuffer = await sharp(req.file.buffer)
       .rotate()
       .resize(400, 400, { fit: 'cover' })
@@ -108,6 +113,12 @@ router.post('/upload', authenticate, requireRole(['admin', 'editor']), upload.si
       }
     }
 
+    // Log upload event
+    try {
+      const { logEvent } = require('../server');
+      logEvent({ type: 'photo_uploaded', userEmail: req.user.email, userName: req.user.displayName, role: req.user.role, targetName: photoData.title || photoData.filename, targetId: photoId, albumName: albumId || '', ip: getIP(req) });
+    } catch {}
+
     res.json({ success: true, photo: photoData });
   } catch (err) {
     console.error(err);
@@ -128,7 +139,6 @@ router.get('/', authenticate, async (req, res) => {
     if (albumId) query = query.where('albumId', '==', albumId);
     if (tag) query = query.where('tags', 'array-contains', tag);
 
-    // If cursor provided, start after that document
     if (cursor) {
       const cursorDoc = await db.collection('photos').doc(cursor).get();
       if (cursorDoc.exists) {
@@ -141,7 +151,6 @@ router.get('/', authenticate, async (req, res) => {
     const snapshot = await query.get();
     const photos = snapshot.docs.map(doc => doc.data());
 
-    // Attach thumbnail URLs
     const photosWithUrls = await Promise.all(
       photos.map(async (photo) => ({
         ...photo,
@@ -149,15 +158,10 @@ router.get('/', authenticate, async (req, res) => {
       }))
     );
 
-    // Return the last doc ID as the next cursor
     const lastDoc = snapshot.docs[snapshot.docs.length - 1];
     const nextCursor = snapshot.docs.length === pageSize ? lastDoc?.id : null;
 
-    res.json({
-      photos: photosWithUrls,
-      nextCursor,
-      hasMore: !!nextCursor,
-    });
+    res.json({ photos: photosWithUrls, nextCursor, hasMore: !!nextCursor });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch photos' });
@@ -175,6 +179,12 @@ router.get('/:photoId', authenticate, async (req, res) => {
       getPresignedUrl(photo.key, 3600),
       getPresignedUrl(photo.thumbKey || photo.key, 3600),
     ]);
+
+    // Log download event (single photo fetch = download intent)
+    try {
+      const { logEvent } = require('../server');
+      logEvent({ type: 'photo_downloaded', userEmail: req.user.email, userName: req.user.displayName, role: req.user.role, targetName: photo.title || photo.filename, targetId: req.params.photoId, albumName: photo.albumId || '', ip: getIP(req) });
+    } catch {}
 
     res.json({ ...photo, fullUrl, thumbUrl });
   } catch (err) {
@@ -220,6 +230,12 @@ router.delete('/:photoId', authenticate, requireRole('admin'), async (req, res) 
         await albumRef.update({ photoCount: Math.max(0, (album.data().photoCount || 1) - 1) });
       }
     }
+
+    // Log delete event
+    try {
+      const { logEvent } = require('../server');
+      logEvent({ type: 'photo_deleted', userEmail: req.user.email, userName: req.user.displayName, role: req.user.role, targetName: photo.title || photo.filename, targetId: req.params.photoId, albumName: photo.albumId || '', ip: getIP(req) });
+    } catch {}
 
     res.json({ success: true });
   } catch (err) {

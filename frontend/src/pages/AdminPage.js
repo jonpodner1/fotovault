@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import LogsTab from '../components/LogsTab';
 
-const TABS = ['Branding', 'Users', 'Settings', 'Sync', 'Cleanup'];
+const TABS = ['Branding', 'Users', 'Settings', 'Sync', 'Cleanup', 'Logs'];
 
 export default function AdminPage() {
   const { isAdmin } = useAuth();
@@ -353,6 +354,12 @@ export default function AdminPage() {
 		  )}
 		</div>
 	  )}
+	  {tab === 'Logs' && (
+		  <div className="admin-section">
+			<h3 style={{ marginBottom: 16 }}>Activity Logs</h3>
+			<LogsTab />
+		  </div>
+		)}
 	</div>
   );
 }

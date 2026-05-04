@@ -5,16 +5,16 @@ const { db } = require('../services/firebase');
 const { getPresignedUrl } = require('../services/wasabi');
 const { authenticate, requireRole } = require('../middleware/auth');
 
+function getIP(req) {
+  return req.headers['cf-connecting-ip'] ||
+    (req.headers['x-forwarded-for'] || '').split(',')[0] ||
+    req.socket.remoteAddress || '';
+}
+
 // ─── CREATE SHARE LINK ────────────────────────────────────────────────────────
 router.post('/', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
   try {
-    const {
-      type,          // 'album' or 'photo'
-      targetId,      // albumId or photoId
-      requiresLogin, // true/false
-      allowDownload, // true/false
-      expiresIn,     // null (never) or seconds as number
-    } = req.body;
+    const { type, targetId, requiresLogin, allowDownload, expiresIn } = req.body;
 
     if (!type || !targetId) {
       return res.status(400).json({ error: 'type and targetId required' });
@@ -37,6 +37,13 @@ router.post('/', authenticate, requireRole(['admin', 'editor']), async (req, res
     };
 
     await db.collection('shares').doc(token).set(share);
+
+    // Log share created
+    try {
+      const { logEvent } = require('../server');
+      logEvent({ type: 'share_created', userEmail: req.user.email, userName: req.user.displayName, role: req.user.role, targetId, targetName: type + ' share', ip: getIP(req), details: 'expires: ' + (expiresAt || 'never') });
+    } catch {}
+
     res.json({ token, url: `${process.env.FRONTEND_URL}/share/${token}`, share });
   } catch (err) {
     console.error(err);
@@ -52,12 +59,10 @@ router.get('/:token', async (req, res) => {
 
     const share = doc.data();
 
-    // Check expiry
     if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
       return res.status(410).json({ error: 'This share link has expired' });
     }
 
-    // If requires login, verify token
     if (share.requiresLogin) {
       const authHeader = req.headers.authorization;
       if (!authHeader?.startsWith('Bearer ')) {
@@ -65,12 +70,16 @@ router.get('/:token', async (req, res) => {
       }
     }
 
-    // Increment view count
     await db.collection('shares').doc(req.params.token).update({
       views: (share.views || 0) + 1
     });
 
-    // Fetch the actual content
+    // Log share accessed
+    try {
+      const { logEvent } = require('../server');
+      logEvent({ type: 'share_accessed', userEmail: 'guest', userName: 'Guest', role: 'guest', targetId: share.targetId, targetName: share.type + ' share', ip: getIP(req), details: 'token: ' + req.params.token });
+    } catch {}
+
     if (share.type === 'photo') {
       const photoDoc = await db.collection('photos').doc(share.targetId).get();
       if (!photoDoc.exists) return res.status(404).json({ error: 'Photo not found' });
@@ -122,7 +131,7 @@ router.get('/', authenticate, requireRole(['admin', 'editor']), async (req, res)
   }
 });
 
-// ─── DELETE SHARE LINK (editor+, own links; admin, any) ───────────────────────
+// ─── DELETE SHARE LINK ────────────────────────────────────────────────────────
 router.delete('/:token', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
   try {
     const doc = await db.collection('shares').doc(req.params.token).get();
