@@ -31,11 +31,10 @@ export default function YearsPage() {
   }, [year]);
 
   const handleAlbumClick = (album) => {
-    if (album.subAlbumCount > 0) {
-      // Has sub-albums — go to sub-album view
+    if (album.subAlbumCount > 0 || isEditor) {
+      // Editors always see sub-album view so they can manage sub-albums
       navigate('/albums/' + album.id);
     } else {
-      // No sub-albums — go straight to photos
       navigate('/?album=' + album.id);
     }
   };
