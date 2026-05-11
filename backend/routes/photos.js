@@ -207,7 +207,50 @@ router.get('/:photoId', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch photo' });
   }
 });
+// ─── MOVE PHOTO TO ALBUM (editor+) ───────────────────────────────────────────
+router.patch('/:photoId/move', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
+  try {
+    const { albumId } = req.body;
+    if (!albumId) return res.status(400).json({ error: 'albumId required' });
 
+    const photoDoc = await db.collection('photos').doc(req.params.photoId).get();
+    if (!photoDoc.exists) return res.status(404).json({ error: 'Photo not found' });
+    const photo = photoDoc.data();
+    const oldAlbumId = photo.albumId;
+
+    // Get new album to find its parentId
+    const newAlbumDoc = await db.collection('albums').doc(albumId).get();
+    if (!newAlbumDoc.exists) return res.status(404).json({ error: 'Target album not found' });
+    const newAlbum = newAlbumDoc.data();
+
+    // Update photo
+    await db.collection('photos').doc(req.params.photoId).update({
+      albumId,
+      parentAlbumId: newAlbum.parentId || null,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Decrement old album count
+    if (oldAlbumId) {
+      const oldAlbum = await db.collection('albums').doc(oldAlbumId).get();
+      if (oldAlbum.exists) {
+        await db.collection('albums').doc(oldAlbumId).update({
+          photoCount: Math.max(0, (oldAlbum.data().photoCount || 1) - 1)
+        });
+      }
+    }
+
+    // Increment new album count
+    await db.collection('albums').doc(albumId).update({
+      photoCount: (newAlbum.photoCount || 0) + 1
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to move photo' });
+  }
+});
 // ─── UPDATE PHOTO METADATA (editor+) ─────────────────────────────────────────
 router.patch('/:photoId', authenticate, requireRole(['admin', 'editor']), async (req, res) => {
   try {

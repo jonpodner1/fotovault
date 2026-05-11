@@ -203,6 +203,7 @@ export default function GalleryPage() {
             onPhotoClick={setLightboxPhoto}
             onDownload={handleDownload}
             onDelete={handleDelete}
+            onMoved={(photoId) => setPhotos(prev => prev.filter(p => p.id !== photoId))}
             onShare={handleShare}
           />
 
