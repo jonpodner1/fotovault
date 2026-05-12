@@ -15,6 +15,7 @@ import api from './utils/api';
 import './styles.css';
 import { analytics } from './firebase';
 import { logEvent } from 'firebase/analytics';
+import YearbooksPage from './pages/YearbooksPage';
 
 export const ConfigContext = React.createContext({});
 
@@ -85,6 +86,12 @@ function AppShell() {
               <ProtectedRoute requiredRole="admin" config={appConfig}><AdminPage /></ProtectedRoute>
             } />
             <Route path="*" element={<Navigate to="/" />} />
+            <Route path="/yearbooks" element={
+              <ProtectedRoute config={appConfig}><YearbooksPage /></ProtectedRoute>
+            } />
+            <Route path="/yearbooks/:year" element={
+              <ProtectedRoute config={appConfig}><YearbooksPage /></ProtectedRoute>
+            } />
           </Routes>
         </main>
       </div>

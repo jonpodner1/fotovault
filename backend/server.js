@@ -12,6 +12,7 @@ const { router: syncRouter } = require('./routes/sync');
 const sharesRouter = require('./routes/shares');
 const cleanupRouter = require('./routes/cleanup');
 const logsRouter = require('./routes/logs');
+const yearbooksRouter = require('./routes/yearbooks');
 
 const app = express();
 
@@ -61,6 +62,7 @@ app.use('/api/sync', syncRouter);
 app.use('/api/shares', sharesRouter);
 app.use('/api/cleanup', cleanupRouter);
 app.use('/api/logs', logsRouter);
+app.use('/api/yearbooks', yearbooksRouter);
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {

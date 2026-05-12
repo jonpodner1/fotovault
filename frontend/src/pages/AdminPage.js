@@ -264,6 +264,12 @@ export default function AdminPage() {
 		<button className="btn-primary" onClick={runSync} disabled={syncing}>
 		  {syncing ? 'Syncing...' : 'Run Sync Now'}
 		</button>
+		<button className="btn-ghost" onClick={async () => {
+		  await api.post('/yearbooks/sync');
+		  alert('Yearbook sync started in background!');
+		}}>
+		  Sync Yearbooks
+		</button>
 		<button className="btn-ghost" onClick={fetchPending} style={{ marginLeft: 10 }}>
 		  Refresh Pending
 		</button>
